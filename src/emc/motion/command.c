@@ -309,8 +309,10 @@ void emcmotDioWrite(int index, char value)
     } else {
 	if (value != 0) {
 	    *(emcmot_hal_data->synch_do[index])=1;
+        *(emcmot_hal_data->synch_do_io[index])=1;
 	} else {
 	    *(emcmot_hal_data->synch_do[index])=0;
+        *(emcmot_hal_data->synch_do_io[index])=0;
 	}
     }
 }
@@ -330,6 +332,7 @@ void emcmotAioWrite(int index, double value)
 	rtapi_print_msg(RTAPI_MSG_ERR, "ERROR: index out of range, %d not in [0..%d] (increase num_aio/EMCMOT_MAX_AIO=%d)\n", index, num_aio, EMCMOT_MAX_AIO);
     } else {
         *(emcmot_hal_data->analog_output[index]) = value;
+        *(emcmot_hal_data->analog_output_io[index]) = value;
     }
 }
 
@@ -581,8 +584,8 @@ check_stuff ( "before command_handler()" );
 	    if (joint == 0) {
 		break;
 	    }
-	    joint->home_offset = emcmotCommand->offset;
-	    joint->home = emcmotCommand->home;
+	    *(joint->home_offset) = emcmotCommand->offset;
+	    *(joint->home) = emcmotCommand->home;
 	    joint->home_final_vel = emcmotCommand->home_final_vel;
 	    joint->home_search_vel = emcmotCommand->search_vel;
 	    joint->home_latch_vel = emcmotCommand->latch_vel;
@@ -929,19 +932,20 @@ check_stuff ( "before command_handler()" );
             if(!is_feed_type(emcmotCommand->motion_type) && emcmotStatus->spindle.css_factor) {
                 emcmotStatus->atspeed_next_feed = 1;
             }
-	    /* append it to the emcmotDebug->queue */
-	    tpSetId(emcmotQueue, emcmotCommand->id);
-	    if (-1 == tpAddLine(emcmotQueue, emcmotCommand->pos, emcmotCommand->motion_type,
+	    /* append it to the emcmotDebug->tp */
+	    tpSetId(&emcmotDebug->tp, emcmotCommand->id);
+        int res_addline = tpAddLine(&emcmotDebug->tp, emcmotCommand->pos, emcmotCommand->motion_type, 
                                 emcmotCommand->vel, emcmotCommand->ini_maxvel, 
                                 emcmotCommand->acc, emcmotStatus->enables_new, issue_atspeed,
-                                emcmotCommand->turn)) {
-		reportError(_("can't add linear move"));
-		emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
-		abort_and_switchback(); // tpAbort(emcmotQueue);
-
-		SET_MOTION_ERROR_FLAG(1);
-		break;
-	    } else {
+                                emcmotCommand->turn, emcmotCommand->tag);
+        if (-1 == res_addline) {
+            reportError(_("can't add linear move at line %d, error code %d"),
+                    emcmotCommand->id, res_addline);
+            emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
+            tpAbort(&emcmotDebug->tp);
+            SET_MOTION_ERROR_FLAG(1);
+            break;
+        } else {
 		SET_MOTION_ERROR_FLAG(0);
 		/* set flag that indicates all joints need rehoming, if any
 		   joint is moved in joint mode, for machines with no forward
@@ -986,7 +990,8 @@ check_stuff ( "before command_handler()" );
                             emcmotCommand->center, emcmotCommand->normal,
                             emcmotCommand->turn, emcmotCommand->motion_type,
                             emcmotCommand->vel, emcmotCommand->ini_maxvel,
-                            emcmotCommand->acc, emcmotStatus->enables_new, issue_atspeed)) {
+                            emcmotCommand->acc, emcmotStatus->enables_new,
+                            issue_atspeed, emcmotCommand->tag)) {
 		reportError(_("can't add circular move"));
 		emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
 		abort_and_switchback(); // tpAbort(emcmotQueue);
@@ -1415,10 +1420,18 @@ check_stuff ( "before command_handler()" );
                 }
             }
 
-	    /* append it to the emcmotDebug->queue */
-	    tpSetId(emcmotQueue, emcmotCommand->id);
-	    if (-1 == tpAddLine(emcmotQueue, emcmotCommand->pos, emcmotCommand->motion_type, emcmotCommand->vel, emcmotCommand->ini_maxvel, emcmotCommand->acc, emcmotStatus->enables_new, 0, -1)) {
-
+	    /* append it to the emcmotDebug->tp */
+	    tpSetId(&emcmotDebug->tp, emcmotCommand->id);
+	    if (-1 == tpAddLine(&emcmotDebug->tp,
+                    emcmotCommand->pos,
+                    emcmotCommand->motion_type,
+                    emcmotCommand->vel,
+                    emcmotCommand->ini_maxvel,
+                    emcmotCommand->acc,
+                    emcmotStatus->enables_new,
+                    0,
+                    -1,
+                    emcmotCommand->tag)) {
 		reportError(_("can't add probe move"));
 		emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;
 		abort_and_switchback(); // tpAbort(emcmotQueue);
@@ -1462,10 +1475,12 @@ check_stuff ( "before command_handler()" );
 		break;
 	    }
 
-	    /* append it to the emcmotDebug->queue */
-	    tpSetId(emcmotQueue, emcmotCommand->id);
-	    if (-1 == tpAddRigidTap(emcmotQueue, emcmotCommand->pos, emcmotCommand->vel, emcmotCommand->ini_maxvel, emcmotCommand->acc, emcmotStatus->enables_new)) {
-
+	    /* append it to the emcmotDebug->tp */
+	    tpSetId(&emcmotDebug->tp, emcmotCommand->id);
+	    if (-1 == tpAddRigidTap(&emcmotDebug->tp, emcmotCommand->pos,
+                    emcmotCommand->vel, emcmotCommand->ini_maxvel,
+                    emcmotCommand->acc,
+                    emcmotStatus->enables_new, emcmotCommand->tag)) {
                 emcmotStatus->atspeed_next_feed = 0; /* rigid tap always waits for spindle to be at-speed */
 		reportError(_("can't add rigid tap move"));
 		emcmotStatus->commandStatus = EMCMOT_COMMAND_BAD_EXEC;

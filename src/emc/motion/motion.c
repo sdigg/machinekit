@@ -73,7 +73,8 @@ emcmot_hal_data_t *emcmot_hal_data = 0;
 /* pointer to joint data */
 emcmot_joint_t *joints = 0;
 
-#ifndef STRUCTS_IN_SHMEM
+/* Joints moved to HAL shared memory */
+#if 0 // #ifndef STRUCTS_IN_SHMEM
 /* allocate array for joint data */
 emcmot_joint_t joint_array[EMCMOT_MAX_JOINTS];
 #endif
@@ -301,6 +302,17 @@ static int init_hal_io(void)
 	return -1;
     }
 
+    /* allocate shared memory for joint data */
+    joints = hal_malloc(sizeof(emcmot_joint_t) * EMCMOT_MAX_JOINTS);
+    if (joints == 0) {
+	rtapi_print_msg(RTAPI_MSG_ERR,
+	    _("MOTION: joints malloc failed\n"));
+	return -1;
+    }
+
+    /* Clear joints memory */
+    memset(joints, 0, sizeof(emcmot_joint_t) * EMCMOT_MAX_JOINTS);
+
     /* export machine wide hal pins */
     if ((retval = hal_pin_bit_newf(HAL_IN, &(emcmot_hal_data->probe_input), mot_comp_id, "motion.probe-input")) < 0) goto error;
     if ((retval = hal_pin_bit_newf(HAL_IO, &(emcmot_hal_data->spindle_index_enable), mot_comp_id, "motion.spindle-index-enable")) < 0) goto error;
@@ -344,16 +356,21 @@ static int init_hal_io(void)
     if ((retval = hal_pin_bit_newf(HAL_IN, &(emcmot_hal_data->enable), mot_comp_id, "motion.enable")) < 0) goto error;
 
     /* export motion-synched digital output pins */
+    /* export motion-synched digital output io pins for compatibility with io signals */
     /* export motion digital input pins */
     for (n = 0; n < num_dio; n++) {
 	if ((retval = hal_pin_bit_newf(HAL_OUT, &(emcmot_hal_data->synch_do[n]), mot_comp_id, "motion.digital-out-%02d", n)) < 0) goto error;
 	if ((retval = hal_pin_bit_newf(HAL_IN, &(emcmot_hal_data->synch_di[n]), mot_comp_id, "motion.digital-in-%02d", n)) < 0) goto error;
+    if ((retval = hal_pin_bit_newf(HAL_IO, &(emcmot_hal_data->synch_do_io[n]), mot_comp_id, "motion.digital-out-io-%02d", n)) < 0) goto error;
     }
 
+    /* export motion-synched analog output pins */
+    /* export motion-synched analog output io pins for compatibility with io signals */
     /* export motion analog input pins */
     for (n = 0; n < num_aio; n++) {
 	if ((retval = hal_pin_float_newf(HAL_OUT, &(emcmot_hal_data->analog_output[n]), mot_comp_id, "motion.analog-out-%02d", n)) < 0) goto error;
 	if ((retval = hal_pin_float_newf(HAL_IN, &(emcmot_hal_data->analog_input[n]), mot_comp_id, "motion.analog-in-%02d", n)) < 0) goto error;
+    if ((retval = hal_pin_float_newf(HAL_IO, &(emcmot_hal_data->analog_output_io[n]), mot_comp_id, "motion.analog-out-io-%02d", n)) < 0) goto error;
     }
 
     /* export machine wide hal parameters */
@@ -616,11 +633,13 @@ static int init_hal_io(void)
     for (n = 0; n < num_dio; n++) {
 	 *(emcmot_hal_data->synch_do[n]) = 0;
 	 *(emcmot_hal_data->synch_di[n]) = 0;
+     *(emcmot_hal_data->synch_do_io[n]) = 0;
     }
 
     for (n = 0; n < num_aio; n++) {
 	 *(emcmot_hal_data->analog_output[n]) = 0.0;
 	 *(emcmot_hal_data->analog_input[n]) = 0.0;
+     *(emcmot_hal_data->analog_output_io[n]) = 0.0;
     }
     
     /*! \todo FIXME - these don't really need initialized, since they are written
@@ -978,16 +997,30 @@ static int init_comm_buffers(void)
     emcmot_config_change();
 
     /* init pointer to joint structs */
-#ifdef STRUCTS_IN_SHMEM
-    joints = &(emcmotDebug->joints[0]);
-#else
-    joints = &(joint_array[0]);
-#endif
+    /* already initialized in init_hal_io, above */
+//#ifdef STRUCTS_IN_SHMEM
+//    joints = &(emcmotDebug->joints[0]);
+//#else
+//    joints = &(joint_array[0]);
+//#endif
 
     /* init per-joint stuff */
     for (joint_num = 0; joint_num < num_joints; joint_num++) {
 	/* point to structure for this joint */
 	joint = &joints[joint_num];
+
+	/* Export some HAL parameters */
+	retval = hal_pin_float_newf(HAL_IN, &(joint->home),
+				    mot_comp_id, "axis.%d.home", joint_num);
+	if (retval != 0) {
+	    return retval;
+	}
+
+	retval = hal_pin_float_newf(HAL_IN, &(joint->home_offset),
+				    mot_comp_id, "axis.%d.home-offset", joint_num);
+	if (retval != 0) {
+	    return retval;
+	}
 
 	/* init the config fields with some "reasonable" defaults" */
 
@@ -1001,8 +1034,8 @@ static int init_comm_buffers(void)
 	joint->home_search_vel = 0.0;
 	joint->home_latch_vel = 0.0;
 	joint->home_final_vel = -1;
-	joint->home_offset = 0.0;
-	joint->home = 0.0;
+	*(joint->home_offset) = 0.0;
+	*(joint->home) = 0.0;
 	joint->home_flags = 0;
 	joint->home_sequence = -1;
 	joint->backlash = 0.0;
